@@ -3,6 +3,6 @@
 
 <div align="center">
   
-**[Join Itqan Community | انضم لمجتمع إتقان](https://discord.gg/24CskUbuuB)**
+**[Join Itqan Community | انضم لمجتمع إتقان](https://community.itqan.dev)**
 
 </div>
