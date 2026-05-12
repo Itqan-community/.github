@@ -1,0 +1,75 @@
+name: Slack Notifications
+
+on:
+  workflow_call:
+    secrets:
+      SLACK_WEBHOOK_ENGINEERING_ALERTS:
+        required: true
+      SLACK_WEBHOOK_RELEASES:
+        required: true
+
+jobs:
+  pr-opened:
+    if: github.event_name == 'pull_request' && github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: slackapi/slack-github-action@v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_ENGINEERING_ALERTS }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "PR opened: *<${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}>*\nBy ${{ github.event.pull_request.user.login }} in `${{ github.repository }}`"
+            }
+
+  pr-merged:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: slackapi/slack-github-action@v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "PR merged: *<${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}>*\nBy ${{ github.event.pull_request.user.login }} into `${{ github.event.pull_request.base.ref }}` in `${{ github.repository }}`"
+            }
+
+  issue-opened:
+    if: github.event_name == 'issues' && github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: slackapi/slack-github-action@v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_ENGINEERING_ALERTS }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "Issue opened: *<${{ github.event.issue.html_url }}|${{ github.event.issue.title }}>*\nBy ${{ github.event.issue.user.login }} in `${{ github.repository }}`"
+            }
+
+  issue-blocker:
+    if: github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'blocker'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: slackapi/slack-github-action@v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_ENGINEERING_ALERTS }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": ":rotating_light: *BLOCKER* :rotating_light:\n*<${{ github.event.issue.html_url }}|${{ github.event.issue.title }}>*\nIn `${{ github.repository }}` — needs immediate attention from Tech Lead."
+            }
+
+  push-to-main:
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: slackapi/slack-github-action@v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "Push to `${{ github.ref_name }}` in `${{ github.repository }}`\nBy ${{ github.actor }}\n> ${{ github.event.head_commit.message }}"
+            }

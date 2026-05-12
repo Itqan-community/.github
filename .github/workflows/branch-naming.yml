@@ -1,0 +1,17 @@
+name: Branch Naming Check
+
+on:
+  workflow_call:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate branch name
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          if [[ ! "$BRANCH" =~ ^(feature|hotfix|community)/.+ ]]; then
+            echo "::error::Branch '$BRANCH' does not match required patterns: feature/*, hotfix/*, community/*"
+            exit 1
+          fi
+          echo "Branch '$BRANCH' is valid."

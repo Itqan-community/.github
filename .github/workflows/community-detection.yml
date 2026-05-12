@@ -1,0 +1,39 @@
+name: Community Contributor Detection
+
+on:
+  workflow_call:
+    secrets:
+      SLACK_WEBHOOK_COMMUNITY_UPDATES:
+        required: true
+
+jobs:
+  detect:
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.action == 'opened' &&
+      github.event.pull_request.author_association != 'MEMBER' &&
+      github.event.pull_request.author_association != 'OWNER' &&
+      github.event.pull_request.author_association != 'COLLABORATOR'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add community label
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              labels: ['community']
+            });
+            console.log(`Added 'community' label to PR #${context.payload.pull_request.number}`);
+
+      - name: Notify community-updates
+        uses: slackapi/slack-github-action@v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_COMMUNITY_UPDATES }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": ":people_holding_hands: Community contribution: *<${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}>*\nBy ${{ github.event.pull_request.user.login }} in `${{ github.repository }}`"
+            }
