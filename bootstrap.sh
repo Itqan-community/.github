@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Bootstrap script: add automation stubs to all Itqan-community repos
+# Bootstrap script: add automation stubs to all Itqan-community repos via PRs
 # Run from the root of the Itqan-community/.github repo after pushing central workflows.
 #
 # What it does:
-#   - Adds .github/workflows/stub files to every active, non-.github repo in the org
-#   - Adds .github/release-drafter.yml config to each repo (Release Drafter reads from same repo)
-#   - Skips repos that already have the file
+#   - Creates branch automation/add-workflows in each repo
+#   - Commits stub files + release-drafter config to that branch
+#   - Opens a PR for review (does not merge)
+#   - Skips repos that already have the stub files
 #   - Skips archived repos and the .github repo itself
 #
 # Usage: bash bootstrap.sh [--dry-run]
@@ -15,7 +16,7 @@
 set -euo pipefail
 
 ORG="Itqan-community"
-CENTRAL_REF="main"
+BRANCH="automation/add-workflows"
 DRY_RUN=false
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
 
@@ -24,24 +25,30 @@ RELEASE_DRAFTER_CONFIG="$(cd "$(dirname "$0")/.github" && pwd)/release-drafter.y
 
 SKIP_REPOS=(".github")
 
-log() { echo "[bootstrap] $*"; }
+log()  { echo "[bootstrap] $*"; }
 skip() { echo "[skip]      $*"; }
-dry() { echo "[dry-run]   would $*"; }
+dry()  { echo "[dry-run]   would $*"; }
+
+default_branch() {
+  gh api "repos/${ORG}/$1" --jq '.default_branch'
+}
+
+branch_exists() {
+  gh api "repos/${ORG}/$1/branches/$2" --silent 2>/dev/null
+}
+
+create_branch() {
+  local repo="$1" base_sha
+  base_sha=$(gh api "repos/${ORG}/${repo}/git/refs/heads/$(default_branch "$repo")" --jq '.object.sha')
+  gh api "repos/${ORG}/${repo}/git/refs" \
+    --method POST \
+    -f ref="refs/heads/${BRANCH}" \
+    -f sha="$base_sha" \
+    --silent
+}
 
 push_file() {
   local repo="$1" dest_path="$2" src_file="$3" commit_msg="$4"
-
-  # Check if file already exists
-  if gh api "repos/${ORG}/${repo}/contents/${dest_path}" --silent 2>/dev/null; then
-    skip "${repo}/${dest_path} already exists"
-    return
-  fi
-
-  if $DRY_RUN; then
-    dry "add ${dest_path} to ${repo}"
-    return
-  fi
-
   local content
   content=$(base64 < "$src_file" | tr -d '\n')
 
@@ -49,9 +56,8 @@ push_file() {
     --method PUT \
     -f message="$commit_msg" \
     -f content="$content" \
+    -f branch="${BRANCH}" \
     --silent
-
-  log "added ${dest_path} to ${repo}"
 }
 
 log "Fetching repo list for ${ORG}..."
@@ -59,27 +65,65 @@ repos=$(gh repo list "$ORG" --limit 100 --json name,isArchived \
   | jq -r '.[] | select(.isArchived == false) | .name')
 
 for repo in $repos; do
-  # Skip the central .github repo and any explicitly excluded repos
   skip_this=false
   for s in "${SKIP_REPOS[@]}"; do
     [[ "$repo" == "$s" ]] && skip_this=true && break
   done
   $skip_this && skip "$repo (excluded)" && continue
 
+  # Skip if stub already exists (already bootstrapped)
+  if gh api "repos/${ORG}/${repo}/contents/.github/workflows/slack-notifications.yml" --silent 2>/dev/null; then
+    skip "$repo (already has stubs)"
+    continue
+  fi
+
   log "Processing ${repo}..."
+
+  if $DRY_RUN; then
+    dry "create branch + PR for ${repo}"
+    continue
+  fi
+
+  # Create branch (skip if it already exists)
+  if ! branch_exists "$repo" "$BRANCH"; then
+    create_branch "$repo"
+  fi
 
   for stub in "$STUB_DIR"/*.yml; do
     filename=$(basename "$stub")
     push_file "$repo" ".github/workflows/${filename}" "$stub" \
       "chore: add ${filename%.*} automation stub"
+    log "  added .github/workflows/${filename}"
   done
 
-  # Release Drafter config must live in each repo (not readable cross-repo)
   push_file "$repo" ".github/release-drafter.yml" "$RELEASE_DRAFTER_CONFIG" \
     "chore: add release-drafter config"
+  log "  added .github/release-drafter.yml"
+
+  # Open PR
+  pr_url=$(gh pr create \
+    --repo "${ORG}/${repo}" \
+    --head "${BRANCH}" \
+    --base "$(default_branch "$repo")" \
+    --title "chore: add automation workflows" \
+    --body "Adds centralized automation workflow stubs from \`Itqan-community/.github\`.
+
+## What's included
+- \`slack-notifications.yml\` — PR/issue/push events → Slack
+- \`branch-naming.yml\` — enforces feature/\*, hotfix/\*, community/\*
+- \`community-detection.yml\` — labels and notifies external contributors
+- \`stale.yml\` — 14d stale label, 21d auto-close
+- \`release-drafter.yml\` — auto-drafts release notes grouped by feat/fix/chore
+- \`notion-sync.yml\` — GitHub issues → Notion tasks (Phase 2, needs NOTION_API_KEY secret)
+- \`release-drafter.yml\` config — release note template
+
+All workflow logic lives in [\`Itqan-community/.github\`](https://github.com/Itqan-community/.github). These files are thin stubs that call into the central workflows.
+
+## Secrets required
+\`SLACK_WEBHOOK_ENGINEERING_ALERTS\`, \`SLACK_WEBHOOK_RELEASES\`, \`SLACK_WEBHOOK_COMMUNITY_UPDATES\` — already set.
+\`NOTION_API_KEY\`, \`NOTION_TASKS_DB_ID\` — set these before merging if you want Notion sync active.")
+  log "PR opened: $pr_url"
 
 done
 
-log "Done. Remember to:"
-log "  1. Add secrets (SLACK_WEBHOOK_*, NOTION_API_KEY, NOTION_TASKS_DB_ID) in org or per-repo settings"
-log "  2. Enable Required Workflows at: https://github.com/organizations/${ORG}/settings/actions"
+log "Done."

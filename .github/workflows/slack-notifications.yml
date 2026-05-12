@@ -4,14 +4,15 @@ on:
   workflow_call:
     secrets:
       SLACK_WEBHOOK_ENGINEERING_ALERTS:
-        required: true
+        required: false
       SLACK_WEBHOOK_RELEASES:
-        required: true
+        required: false
 
 jobs:
   pr-opened:
     if: github.event_name == 'pull_request' && github.event.action == 'opened'
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: slackapi/slack-github-action@v2.0.0
         with:
@@ -25,6 +26,7 @@ jobs:
   pr-merged:
     if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: slackapi/slack-github-action@v2.0.0
         with:
@@ -38,6 +40,7 @@ jobs:
   issue-opened:
     if: github.event_name == 'issues' && github.event.action == 'opened'
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: slackapi/slack-github-action@v2.0.0
         with:
@@ -51,6 +54,7 @@ jobs:
   issue-blocker:
     if: github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'blocker'
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: slackapi/slack-github-action@v2.0.0
         with:
@@ -58,12 +62,13 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": ":rotating_light: *BLOCKER* :rotating_light:\n*<${{ github.event.issue.html_url }}|${{ github.event.issue.title }}>*\nIn `${{ github.repository }}` — needs immediate attention from Tech Lead."
+              "text": ":rotating_light: *BLOCKER* :rotating_light:\n*<${{ github.event.issue.html_url }}|${{ github.event.issue.title }}>*\nIn `${{ github.repository }}` needs immediate attention from Tech Lead."
             }
 
   push-to-main:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: slackapi/slack-github-action@v2.0.0
         with:
