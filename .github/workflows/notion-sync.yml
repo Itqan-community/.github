@@ -49,18 +49,36 @@ jobs:
               return;
             }
 
+            // Map GitHub labels → Notion Tags and Priority
+            const labelToTag = {
+              'bug': 'Bug', 'frontend': 'Frontend', 'backend': 'Backend',
+              'devops': 'Devops', 'security': 'Security', 'documentation': 'Docs',
+              'monitoring': 'Monitoring', 'internal': 'Internal/Technical'
+            };
+            const priorityMap = {
+              'priority: high': 'High', 'high': 'High',
+              'priority: medium': 'Medium', 'medium': 'Medium',
+              'priority: low': 'Low', 'low': 'Low'
+            };
+            const lowerLabels = issueLabels.map(l => l.toLowerCase());
+            const tags = lowerLabels.map(l => labelToTag[l]).filter(Boolean);
+            const priority = lowerLabels.map(l => priorityMap[l]).find(Boolean) || 'Medium';
+
+            const properties = {
+              'Subtask Name': { title: [{ text: { content: issueTitle } }] },
+              'GitHub URL': { url: issueUrl },
+              'GitHub Issue Number': { number: issueNumber },
+              'Status': { select: { name: 'In progress' } },
+              'Priority': { select: { name: priority } },
+            };
+            if (tags.length > 0) {
+              properties['Tags'] = { multi_select: tags.map(t => ({ name: t })) };
+            }
+
             const createRes = await fetch('https://api.notion.com/v1/pages', {
               method: 'POST',
               headers,
-              body: JSON.stringify({
-                parent: { database_id: dbId },
-                properties: {
-                  'Subtask Name': { title: [{ text: { content: issueTitle } }] },
-                  'GitHub URL': { url: issueUrl },
-                  'GitHub Issue Number': { number: issueNumber },
-                  'Status': { select: { name: 'In progress' } }
-                }
-              })
+              body: JSON.stringify({ parent: { database_id: dbId }, properties })
             });
 
             const created = await createRes.json();
