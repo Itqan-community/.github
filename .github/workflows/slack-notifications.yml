@@ -7,6 +7,10 @@ on:
         required: false
       SLACK_WEBHOOK_RELEASES:
         required: false
+      SLACK_WEBHOOK_INCIDENTS:
+        required: false
+      HEALTH_CHECK_URL:
+        required: false
 
 jobs:
   pr-opened:
@@ -78,3 +82,46 @@ jobs:
             {
               "text": "Push to `${{ github.ref_name }}` in `${{ github.repository }}`\nBy ${{ github.actor }}\n> ${{ github.event.head_commit.message }}"
             }
+
+  deploy-health-check:
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
+      SLACK_WEBHOOK_RELEASES: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
+      SLACK_WEBHOOK_INCIDENTS: ${{ secrets.SLACK_WEBHOOK_INCIDENTS }}
+    steps:
+      - name: Wait and verify deployment health
+        run: |
+          if [[ -z "$HEALTH_CHECK_URL" ]]; then
+            echo "HEALTH_CHECK_URL not set, skipping."
+            exit 0
+          fi
+
+          echo "Waiting 60s for Railway deployment to start..."
+          sleep 60
+
+          HTTP_STATUS="000"
+          for attempt in 1 2 3 4 5; do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" --max-time 15 || echo "000")
+            echo "Attempt $attempt: HTTP $HTTP_STATUS"
+            if [[ "$HTTP_STATUS" =~ ^2 ]]; then
+              break
+            fi
+            [[ $attempt -lt 5 ]] && sleep 30
+          done
+
+          REPO="${{ github.repository }}"
+          BRANCH="${{ github.ref_name }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          if [[ "$HTTP_STATUS" =~ ^2 ]]; then
+            curl -s -X POST "$SLACK_WEBHOOK_RELEASES" \
+              -H "Content-Type: application/json" \
+              -d "{\"text\": \":white_check_mark: *${REPO}* deployed to \`${BRANCH}\` — health check passed (HTTP ${HTTP_STATUS})\"}"
+          else
+            curl -s -X POST "$SLACK_WEBHOOK_INCIDENTS" \
+              -H "Content-Type: application/json" \
+              -d "{\"text\": \":rotating_light: *${REPO}* deploy health check FAILED on \`${BRANCH}\` — HTTP ${HTTP_STATUS}. <${RUN_URL}|View run>\"}"
+          fi
