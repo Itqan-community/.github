@@ -57,15 +57,29 @@ create_branch() {
 
 push_file() {
   local repo="$1" dest_path="$2" src_file="$3" commit_msg="$4"
-  local content
+  local content existing_sha
   content=$(base64 < "$src_file" | tr -d '\n')
 
-  gh api "repos/${ORG}/${repo}/contents/${dest_path}" \
-    --method PUT \
-    -f message="$commit_msg" \
-    -f content="$content" \
-    -f branch="${BRANCH}" \
-    --silent
+  # If file already exists on the branch, include its SHA (required for update)
+  existing_sha=$(gh api "repos/${ORG}/${repo}/contents/${dest_path}?ref=${BRANCH}" \
+    --jq '.sha' 2>/dev/null || echo "")
+
+  if [[ -n "$existing_sha" ]]; then
+    gh api "repos/${ORG}/${repo}/contents/${dest_path}" \
+      --method PUT \
+      -f message="$commit_msg" \
+      -f content="$content" \
+      -f branch="${BRANCH}" \
+      -f sha="$existing_sha" \
+      --silent
+  else
+    gh api "repos/${ORG}/${repo}/contents/${dest_path}" \
+      --method PUT \
+      -f message="$commit_msg" \
+      -f content="$content" \
+      -f branch="${BRANCH}" \
+      --silent
+  fi
 }
 
 log "Fetching repo list for ${ORG}..."
