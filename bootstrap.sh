@@ -29,6 +29,14 @@ log()  { echo "[bootstrap] $*"; }
 skip() { echo "[skip]      $*"; }
 dry()  { echo "[dry-run]   would $*"; }
 
+create_environment() {
+  local repo="$1" env="$2"
+  gh api "repos/${ORG}/${repo}/environments/${env}" \
+    --method PUT \
+    --input /dev/null \
+    --silent
+}
+
 default_branch() {
   gh api "repos/${ORG}/$1" --jq '.default_branch'
 }
@@ -71,16 +79,24 @@ for repo in $repos; do
   done
   $skip_this && skip "$repo (excluded)" && continue
 
-  # Skip if stub already exists (already bootstrapped)
-  if gh api "repos/${ORG}/${repo}/contents/.github/workflows/slack-notifications.yml" --silent 2>/dev/null; then
-    skip "$repo (already has stubs)"
+  # Determine which stubs are missing
+  missing_stubs=()
+  for stub_file in "$STUB_DIR"/*.yml; do
+    filename=$(basename "$stub_file")
+    if ! gh api "repos/${ORG}/${repo}/contents/.github/workflows/${filename}" --silent 2>/dev/null; then
+      missing_stubs+=("$stub_file")
+    fi
+  done
+
+  if [[ ${#missing_stubs[@]} -eq 0 ]]; then
+    skip "$repo (all stubs present)"
     continue
   fi
 
-  log "Processing ${repo}..."
+  log "Processing ${repo} (missing: $(printf '%s ' "${missing_stubs[@]}" | xargs -n1 basename | tr '\n' ' '))..."
 
   if $DRY_RUN; then
-    dry "create branch + PR for ${repo}"
+    dry "push ${#missing_stubs[@]} stub(s) to ${repo}"
     continue
   fi
 
@@ -89,7 +105,7 @@ for repo in $repos; do
     create_branch "$repo"
   fi
 
-  for stub in "$STUB_DIR"/*.yml; do
+  for stub in "${missing_stubs[@]}"; do
     filename=$(basename "$stub")
     push_file "$repo" ".github/workflows/${filename}" "$stub" \
       "chore: add ${filename%.*} automation stub"
@@ -99,6 +115,12 @@ for repo in $repos; do
   push_file "$repo" ".github/release-drafter.yml" "$RELEASE_DRAFTER_CONFIG" \
     "chore: add release-drafter config"
   log "  added .github/release-drafter.yml"
+
+  # Create GitHub Environments
+  for env in staging prod; do
+    create_environment "$repo" "$env"
+    log "  environment '${env}' created"
+  done
 
   # Open PR
   pr_url=$(gh pr create \
@@ -115,13 +137,18 @@ for repo in $repos; do
 - \`stale.yml\` — 14d stale label, 21d auto-close
 - \`release-drafter.yml\` — auto-drafts release notes grouped by feat/fix/chore
 - \`notion-sync.yml\` — GitHub issues → Notion tasks (Phase 2, needs NOTION_API_KEY secret)
+- \`hub-compliance.yml\` — verifies all required stubs present on every PR (org compliance gate)
 - \`release-drafter.yml\` config — release note template
 
 All workflow logic lives in [\`Itqan-community/.github\`](https://github.com/Itqan-community/.github). These files are thin stubs that call into the central workflows.
 
 ## Secrets required
-\`SLACK_WEBHOOK_ENGINEERING_ALERTS\`, \`SLACK_WEBHOOK_RELEASES\`, \`SLACK_WEBHOOK_COMMUNITY_UPDATES\` — already set.
-\`NOTION_API_KEY\`, \`NOTION_TASKS_DB_ID\` — set these before merging if you want Notion sync active.")
+\`SLACK_WEBHOOK_ENGINEERING_ALERTS\`, \`SLACK_WEBHOOK_RELEASES\`, \`SLACK_WEBHOOK_COMMUNITY_UPDATES\`, \`SLACK_WEBHOOK_INCIDENTS\` — set at repo level.
+\`NOTION_API_KEY\`, \`NOTION_TASKS_DB_ID\` — set these before merging if you want Notion sync active.
+\`HEALTH_CHECK_URL\` — optional. Set to your Railway service URL (e.g. \`https://your-app.railway.app/health\`) to enable post-deploy health checks.
+
+## GitHub Environments
+\`staging\` and \`prod\` environments have been created on this repo. Override any secret per-environment when values differ.")
   log "PR opened: $pr_url"
 
 done
