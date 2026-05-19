@@ -1,0 +1,41 @@
+name: Post-Deploy Health Check
+
+on:
+  workflow_call:
+    secrets:
+      HEALTH_CHECK_URL:
+        required: false
+      SLACK_WEBHOOK_INCIDENTS:
+        required: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Ping health endpoint
+        env:
+          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_INCIDENTS }}
+        run: |
+          if [[ -z "$HEALTH_CHECK_URL" ]]; then
+            echo "HEALTH_CHECK_URL not set, skipping."
+            exit 0
+          fi
+
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "$HEALTH_CHECK_URL" || echo "000")
+
+          if [[ "$STATUS" == "200" ]]; then
+            echo "Health check passed: HTTP $STATUS"
+            exit 0
+          fi
+
+          echo "Health check FAILED: HTTP $STATUS for $HEALTH_CHECK_URL"
+
+          if [[ -n "$SLACK_WEBHOOK" ]]; then
+            curl -s -X POST "$SLACK_WEBHOOK" \
+              -H "Content-Type: application/json" \
+              -d "{\"text\":\":red_circle: *${GITHUB_REPOSITORY}* health check failed after push. HTTP ${STATUS} — <${HEALTH_CHECK_URL}|${HEALTH_CHECK_URL}>\"}"
+          fi
+
+          exit 1
