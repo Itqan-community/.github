@@ -104,7 +104,7 @@ jobs:
 
           HTTP_STATUS="000"
           for attempt in 1 2 3 4 5; do
-            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" --max-time 15 || echo "000")
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" --max-time 15 2>/dev/null)
             echo "Attempt $attempt: HTTP $HTTP_STATUS"
             if [[ "$HTTP_STATUS" =~ ^2 ]]; then
               break
