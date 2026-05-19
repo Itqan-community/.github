@@ -1,7 +1,7 @@
 name: Notion Sync
 on:
   issues:
-    types: [opened]
+    types: [opened, closed]
   pull_request:
     types: [closed]
 
