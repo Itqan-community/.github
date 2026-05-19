@@ -88,6 +88,67 @@ jobs:
               core.setFailed(`Failed to create Notion task: ${JSON.stringify(created)}`);
             }
 
+  close-task:
+    if: github.event_name == 'issues' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Update Notion task to Done on issue close
+        uses: actions/github-script@v7
+        env:
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_TASKS_DB_ID: ${{ secrets.NOTION_TASKS_DB_ID }}
+        with:
+          script: |
+            const notionKey = process.env.NOTION_API_KEY;
+            const dbId = process.env.NOTION_TASKS_DB_ID;
+            if (!notionKey || !dbId) {
+              console.log('Notion secrets not configured, skipping.');
+              return;
+            }
+
+            const issueUrl = context.payload.issue.html_url;
+            const issueNumber = context.payload.issue.number;
+            const headers = {
+              'Authorization': `Bearer ${notionKey}`,
+              'Notion-Version': '2022-06-28',
+              'Content-Type': 'application/json'
+            };
+
+            // Find page by URL, fall back to issue number
+            let pageId = null;
+            const urlRes = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
+              method: 'POST', headers,
+              body: JSON.stringify({ filter: { property: 'GitHub URL', url: { equals: issueUrl } } })
+            });
+            const urlData = await urlRes.json();
+            if (urlData.results?.length > 0) {
+              pageId = urlData.results[0].id;
+            } else {
+              const numRes = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
+                method: 'POST', headers,
+                body: JSON.stringify({ filter: { property: 'GitHub Issue Number', number: { equals: issueNumber } } })
+              });
+              const numData = await numRes.json();
+              if (numData.results?.length > 0) pageId = numData.results[0].id;
+            }
+
+            if (!pageId) {
+              console.log(`No Notion task found for issue #${issueNumber}, skipping.`);
+              return;
+            }
+
+            const updateRes = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+              method: 'PATCH', headers,
+              body: JSON.stringify({ properties: { 'Status': { select: { name: 'Done' } } } })
+            });
+            const updated = await updateRes.json();
+            if (updated.id) {
+              console.log(`Notion task ${pageId} → Done (issue #${issueNumber} closed)`);
+            } else {
+              console.error(`Failed: ${JSON.stringify(updated)}`);
+            }
+
   update-task:
     if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
