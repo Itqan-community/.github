@@ -58,7 +58,7 @@ jobs:
                   'Subtask Name': { title: [{ text: { content: issueTitle } }] },
                   'GitHub URL': { url: issueUrl },
                   'GitHub Issue Number': { number: issueNumber },
-                  'Status': { status: { name: 'In progress' } }
+                  'Status': { select: { name: 'In progress' } }
                 }
               })
             });
@@ -138,7 +138,7 @@ jobs:
                 method: 'PATCH',
                 headers,
                 body: JSON.stringify({
-                  properties: { 'Status': { status: { name: 'Done' } } }
+                  properties: { 'Status': { select: { name: 'Done' } } }
                 })
               });
               const updated = await updateRes.json();
