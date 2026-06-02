@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - name: Sync Notion status changes and comments to GitHub issues
+      - name: Sync Notion status + comments to GitHub issues
         uses: actions/github-script@v8
         env:
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
@@ -45,7 +45,72 @@ jobs:
               'User-Agent': 'Itqan-notion-to-github-sync'
             };
 
-            // Helper: apply status sync + comment sync for a task
+            // ── Status → label mapping ──
+            const STATUS_LABEL_MAP = {
+              'Todo':               { label: 'status: todo',        color: 'C5DEF5' },
+              'In progress':        { label: 'status: in-progress', color: '0075CA' },
+              'Review By Business': { label: 'status: review',      color: 'E4B849' },
+              'Active Backlog':     { label: 'status: backlog',     color: 'D4C5F9' },
+            };
+            const ALL_STATUS_LABELS = Object.values(STATUS_LABEL_MAP).map(v => v.label);
+
+            // Ensure a status label exists in the repo (upsert)
+            async function ensureLabel(owner, repo, labelDef) {
+              const checkRes = await fetch(
+                `https://api.github.com/repos/${owner}/${repo}/labels/${encodeURIComponent(labelDef.label)}`,
+                { headers: ghHeaders }
+              );
+              if (!checkRes.ok) {
+                await fetch(`https://api.github.com/repos/${owner}/${repo}/labels`, {
+                  method: 'POST', headers: ghHeaders,
+                  body: JSON.stringify({ name: labelDef.label, color: labelDef.color })
+                });
+              }
+            }
+
+            // Sync label on a GitHub issue to match Notion status
+            async function syncLabel(owner, repo, issueNumber, notionStatus) {
+              const labelsRes = await fetch(
+                `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/labels`,
+                { headers: ghHeaders }
+              );
+              const currentLabels = labelsRes.ok ? await labelsRes.json() : [];
+              const currentStatusLabels = currentLabels.filter(l => ALL_STATUS_LABELS.includes(l.name));
+              const targetLabelDef = STATUS_LABEL_MAP[notionStatus];
+
+              if (notionStatus === 'Done') {
+                // Remove all status labels on close
+                for (const l of currentStatusLabels) {
+                  await fetch(
+                    `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(l.name)}`,
+                    { method: 'DELETE', headers: ghHeaders }
+                  );
+                }
+              } else if (targetLabelDef) {
+                // Ensure label exists, remove wrong ones, add correct one
+                await ensureLabel(owner, repo, targetLabelDef);
+                for (const l of currentStatusLabels) {
+                  if (l.name !== targetLabelDef.label) {
+                    await fetch(
+                      `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(l.name)}`,
+                      { method: 'DELETE', headers: ghHeaders }
+                    );
+                  }
+                }
+                if (!currentStatusLabels.some(l => l.name === targetLabelDef.label)) {
+                  await fetch(
+                    `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/labels`,
+                    {
+                      method: 'POST', headers: ghHeaders,
+                      body: JSON.stringify({ labels: [targetLabelDef.label] })
+                    }
+                  );
+                  console.log(`  [${owner}/${repo}#${issueNumber}] Label set → ${targetLabelDef.label}`);
+                }
+              }
+            }
+
+            // ── Process one task ──
             async function processTask(task) {
               const notionStatus = task.properties['Status']?.select?.name;
               const githubUrl = task.properties['GitHub URL']?.url;
@@ -65,7 +130,7 @@ jobs:
               if (!issueRes.ok) return;
               const issue = await issueRes.json();
 
-              // Status sync
+              // State sync
               if (notionStatus === 'Done' && issue.state === 'open') {
                 const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}`, {
                   method: 'PATCH', headers: ghHeaders,
@@ -76,7 +141,7 @@ jobs:
                     method: 'POST', headers: ghHeaders,
                     body: JSON.stringify({ body: '✅ Closed automatically — task marked **Done** in Notion.' })
                   });
-                  console.log(`  [${owner}/${repo}#${issueNumber}] Closed (Notion=Done, was open)`);
+                  console.log(`  [${owner}/${repo}#${issueNumber}] Closed (Notion=Done)`);
                 }
               } else if (
                 ['Todo', 'In progress', 'Review By Business', 'Active Backlog'].includes(notionStatus) &&
@@ -89,13 +154,16 @@ jobs:
                 if (r.ok) {
                   await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/comments`, {
                     method: 'POST', headers: ghHeaders,
-                    body: JSON.stringify({ body: `🔄 Reopened automatically — task status changed to **${notionStatus}** in Notion.` })
+                    body: JSON.stringify({ body: `🔄 Reopened automatically — status changed to **${notionStatus}** in Notion.` })
                   });
-                  console.log(`  [${owner}/${repo}#${issueNumber}] Reopened (Notion=${notionStatus}, was closed)`);
+                  console.log(`  [${owner}/${repo}#${issueNumber}] Reopened (Notion=${notionStatus})`);
                 }
               }
 
-              // Comment sync: Notion → GitHub (only for recently-edited tasks)
+              // Label sync (always reconcile to match Notion status)
+              await syncLabel(owner, repo, issueNumber, notionStatus);
+
+              // Comment sync (only for recently-edited tasks from pass 1)
               if (!task._fromRecent) return;
 
               const notionCommentsRes = await fetch(
@@ -127,11 +195,11 @@ jobs:
                     })
                   }
                 );
-                if (r.ok) console.log(`  [${owner}/${repo}#${issueNumber}] Synced Notion comment ${nc.id} → GitHub`);
+                if (r.ok) console.log(`  [${owner}/${repo}#${issueNumber}] Synced Notion comment → GitHub`);
               }
             }
 
-            // ── PASS 1: Recently edited tasks (catches Notion-initiated changes + new comments) ──
+            // ── PASS 1: Recently edited tasks ──
             const lookbackMinutes = parseInt(process.env.LOOKBACK_MINUTES || '2');
             const since = new Date(Date.now() - lookbackMinutes * 60 * 1000).toISOString();
             console.log(`Pass 1: tasks edited since ${since}`);
@@ -150,15 +218,13 @@ jobs:
             });
             const recentData = await recentRes.json();
             const recentTasks = (recentData.results || []).map(t => ({ ...t, _fromRecent: true }));
-            console.log(`Pass 1: ${recentTasks.length} task(s) found`);
+            console.log(`Pass 1: ${recentTasks.length} task(s)`);
             for (const task of recentTasks) await processTask(task);
 
-            // ── PASS 2: Full reconciliation — all tasks with GitHub URLs ──
-            // Catches both directions: Done-in-Notion+open-in-GH and active-in-Notion+closed-in-GH
-            // Excludes Stale Backlog (intentionally dormant, no sync)
+            // ── PASS 2: Full reconciliation (all tasks except Stale Backlog) ──
             console.log('Pass 2: full reconciliation');
 
-            const activeRes = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
+            const allRes = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
               method: 'POST', headers: notionHeaders,
               body: JSON.stringify({
                 filter: {
@@ -170,11 +236,8 @@ jobs:
                 page_size: 100
               })
             });
-            const activeData = await activeRes.json();
-            const activeTasks = (activeData.results || []);
-
-            // Skip tasks already handled in pass 1
+            const allData = await allRes.json();
             const recentIds = new Set(recentTasks.map(t => t.id));
-            const reconcileTasks = activeTasks.filter(t => !recentIds.has(t.id));
-            console.log(`Pass 2: ${reconcileTasks.length} task(s) to reconcile`);
+            const reconcileTasks = (allData.results || []).filter(t => !recentIds.has(t.id));
+            console.log(`Pass 2: ${reconcileTasks.length} task(s)`);
             for (const task of reconcileTasks) await processTask(task);
