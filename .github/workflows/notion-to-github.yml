@@ -1,0 +1,171 @@
+name: Notion to GitHub Sync
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      lookback_minutes:
+        description: 'Minutes to look back for Notion changes (use higher value to catch up after downtime)'
+        default: '15'
+        required: false
+        type: string
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Sync Notion status changes to GitHub issues
+        uses: actions/github-script@v8
+        env:
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_TASKS_DB_ID: ${{ secrets.NOTION_TASKS_DB_ID }}
+          GH_PAT: ${{ secrets.GH_PAT_STANDUP }}
+          LOOKBACK_MINUTES: ${{ inputs.lookback_minutes || '15' }}
+        with:
+          script: |
+            const notionKey = process.env.NOTION_API_KEY;
+            const dbId = process.env.NOTION_TASKS_DB_ID;
+            const ghToken = process.env.GH_PAT;
+
+            if (!notionKey || !dbId || !ghToken) {
+              console.log('Missing secrets (NOTION_API_KEY, NOTION_TASKS_DB_ID, or GH_PAT_STANDUP), skipping.');
+              return;
+            }
+
+            const lookbackMinutes = parseInt(process.env.LOOKBACK_MINUTES || '15');
+            const since = new Date(Date.now() - lookbackMinutes * 60 * 1000).toISOString();
+            console.log(`Querying Notion for tasks edited since ${since} (last ${lookbackMinutes}m)`);
+
+            const notionHeaders = {
+              'Authorization': `Bearer ${notionKey}`,
+              'Notion-Version': '2022-06-28',
+              'Content-Type': 'application/json'
+            };
+            const ghHeaders = {
+              'Authorization': `token ${ghToken}`,
+              'Accept': 'application/vnd.github+json',
+              'User-Agent': 'Itqan-notion-to-github-sync'
+            };
+
+            // Query Notion: tasks edited recently with a GitHub URL set
+            const queryRes = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
+              method: 'POST',
+              headers: notionHeaders,
+              body: JSON.stringify({
+                filter: {
+                  and: [
+                    {
+                      timestamp: 'last_edited_time',
+                      last_edited_time: { after: since }
+                    },
+                    {
+                      property: 'GitHub URL',
+                      url: { is_not_empty: true }
+                    }
+                  ]
+                },
+                page_size: 100
+              })
+            });
+
+            const queryData = await queryRes.json();
+            if (!queryData.results) {
+              console.log(`Notion query failed: ${JSON.stringify(queryData)}`);
+              return;
+            }
+
+            console.log(`Found ${queryData.results.length} recently edited task(s) with GitHub URLs`);
+            if (queryData.results.length === 0) return;
+
+            for (const task of queryData.results) {
+              const notionStatus = task.properties['Status']?.select?.name;
+              const githubUrl = task.properties['GitHub URL']?.url;
+              const taskTitle = task.properties['Subtask Name']?.title?.[0]?.plain_text || 'Untitled';
+
+              if (!githubUrl) continue;
+
+              // Only handle issue URLs (skip PR URLs)
+              const issueMatch = githubUrl.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
+              if (!issueMatch) {
+                console.log(`Skipping non-issue URL: ${githubUrl}`);
+                continue;
+              }
+
+              const [, owner, repo, issueNumberStr] = issueMatch;
+              const issueNumber = parseInt(issueNumberStr);
+
+              console.log(`\nTask: "${taskTitle}" | Notion status: ${notionStatus} | Issue: ${owner}/${repo}#${issueNumber}`);
+
+              // Get current GitHub issue state
+              const issueRes = await fetch(
+                `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}`,
+                { headers: ghHeaders }
+              );
+              if (!issueRes.ok) {
+                console.log(`  Could not fetch issue (${issueRes.status}), skipping.`);
+                continue;
+              }
+              const issue = await issueRes.json();
+              console.log(`  GitHub issue state: ${issue.state}`);
+
+              // Done → close issue (only if currently open)
+              if (notionStatus === 'Done' && issue.state === 'open') {
+                const closeRes = await fetch(
+                  `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}`,
+                  {
+                    method: 'PATCH',
+                    headers: ghHeaders,
+                    body: JSON.stringify({ state: 'closed' })
+                  }
+                );
+                if (closeRes.ok) {
+                  await fetch(
+                    `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/comments`,
+                    {
+                      method: 'POST',
+                      headers: ghHeaders,
+                      body: JSON.stringify({
+                        body: '✅ Closed automatically — task marked **Done** in Notion.'
+                      })
+                    }
+                  );
+                  console.log(`  Closed issue and added comment.`);
+                } else {
+                  console.log(`  Failed to close: ${JSON.stringify(await closeRes.json())}`);
+                }
+
+              // Todo / In progress / Review By Business / Active Backlog → reopen (only if closed)
+              } else if (
+                ['Todo', 'In progress', 'Review By Business', 'Active Backlog'].includes(notionStatus) &&
+                issue.state === 'closed'
+              ) {
+                const reopenRes = await fetch(
+                  `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}`,
+                  {
+                    method: 'PATCH',
+                    headers: ghHeaders,
+                    body: JSON.stringify({ state: 'open' })
+                  }
+                );
+                if (reopenRes.ok) {
+                  await fetch(
+                    `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/comments`,
+                    {
+                      method: 'POST',
+                      headers: ghHeaders,
+                      body: JSON.stringify({
+                        body: `🔄 Reopened automatically — task status changed to **${notionStatus}** in Notion.`
+                      })
+                    }
+                  );
+                  console.log(`  Reopened issue and added comment.`);
+                } else {
+                  console.log(`  Failed to reopen: ${JSON.stringify(await reopenRes.json())}`);
+                }
+
+              } else {
+                console.log(`  No action needed (Notion=${notionStatus}, GitHub=${issue.state}).`);
+              }
+            }
