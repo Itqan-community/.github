@@ -16,13 +16,13 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - name: Sync Notion status changes to GitHub issues
+      - name: Sync Notion status changes and comments to GitHub issues
         uses: actions/github-script@v8
         env:
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_TASKS_DB_ID: ${{ secrets.NOTION_TASKS_DB_ID }}
           GH_PAT: ${{ secrets.GH_PAT_STANDUP }}
-          LOOKBACK_MINUTES: ${{ inputs.lookback_minutes || '15' }}
+          LOOKBACK_MINUTES: ${{ inputs.lookback_minutes || '2' }}
         with:
           script: |
             const notionKey = process.env.NOTION_API_KEY;
@@ -110,6 +110,8 @@ jobs:
               const issue = await issueRes.json();
               console.log(`  GitHub issue state: ${issue.state}`);
 
+              // --- Status sync ---
+
               // Done → close issue (only if currently open)
               if (notionStatus === 'Done' && issue.state === 'open') {
                 const closeRes = await fetch(
@@ -166,6 +168,56 @@ jobs:
                 }
 
               } else {
-                console.log(`  No action needed (Notion=${notionStatus}, GitHub=${issue.state}).`);
+                console.log(`  No status action needed (Notion=${notionStatus}, GitHub=${issue.state}).`);
+              }
+
+              // --- Comment sync: Notion → GitHub ---
+
+              // Fetch all Notion page comments
+              const notionCommentsRes = await fetch(
+                `https://api.notion.com/v1/comments?block_id=${task.id}`,
+                { headers: notionHeaders }
+              );
+              const notionCommentsData = await notionCommentsRes.json();
+              const notionComments = notionCommentsData.results || [];
+
+              if (notionComments.length === 0) continue;
+
+              // Fetch existing GitHub comments for dedup check
+              const ghCommentsRes = await fetch(
+                `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=100`,
+                { headers: ghHeaders }
+              );
+              const ghComments = ghCommentsRes.ok ? await ghCommentsRes.json() : [];
+
+              for (const nc of notionComments) {
+                const ncText = (nc.rich_text || []).map(t => t.plain_text).join('');
+
+                // Skip comments synced FROM GitHub (starts with [GH:) — avoids loop
+                if (ncText.startsWith('[GH:')) continue;
+
+                // Skip if already synced to GitHub (dedup by Notion comment ID marker)
+                const marker = `<!-- notion-comment-id: ${nc.id} -->`;
+                if (ghComments.some(c => c.body?.includes(marker))) continue;
+
+                // Resolve commenter name (Notion user object)
+                const authorName = nc.created_by?.name || 'Notion user';
+
+                // Create GitHub comment
+                const createRes = await fetch(
+                  `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/comments`,
+                  {
+                    method: 'POST',
+                    headers: ghHeaders,
+                    body: JSON.stringify({
+                      body: `💬 **Comment from Notion**\n> **${authorName}**: ${ncText}\n\n<!-- notion-comment-id: ${nc.id} -->`
+                    })
+                  }
+                );
+                if (createRes.ok) {
+                  console.log(`  Synced Notion comment ${nc.id} → GitHub.`);
+                } else {
+                  console.log(`  Failed to sync Notion comment: ${JSON.stringify(await createRes.json())}`);
+                }
               }
             }
