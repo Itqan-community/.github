@@ -153,9 +153,10 @@ jobs:
             console.log(`Pass 1: ${recentTasks.length} task(s) found`);
             for (const task of recentTasks) await processTask(task);
 
-            // ── PASS 2: Full reconciliation — all active tasks (catches GitHub-side divergence) ──
-            // Active = has GitHub URL + not Done or Stale Backlog (dormant states)
-            console.log('Pass 2: full reconciliation of active tasks');
+            // ── PASS 2: Full reconciliation — all tasks with GitHub URLs ──
+            // Catches both directions: Done-in-Notion+open-in-GH and active-in-Notion+closed-in-GH
+            // Excludes Stale Backlog (intentionally dormant, no sync)
+            console.log('Pass 2: full reconciliation');
 
             const activeRes = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
               method: 'POST', headers: notionHeaders,
@@ -163,7 +164,6 @@ jobs:
                 filter: {
                   and: [
                     { property: 'GitHub URL', url: { is_not_empty: true } },
-                    { property: 'Status', select: { does_not_equal: 'Done' } },
                     { property: 'Status', select: { does_not_equal: 'Stale Backlog' } }
                   ]
                 },
