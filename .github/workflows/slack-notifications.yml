@@ -52,7 +52,7 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": "Issue opened: *<${{ github.event.issue.html_url }}|${{ github.event.issue.title }}>*\nBy ${{ github.event.issue.user.login }} in `${{ github.repository }}`"
+              "text": ":loudspeaker: :bug: Issue opened: *<${{ github.event.issue.html_url }}|${{ github.event.issue.title }}>* :bug: :loudspeaker:\nBy ${{ github.event.issue.user.login }} in `${{ github.repository }}`"
             }
 
   issue-blocker:
