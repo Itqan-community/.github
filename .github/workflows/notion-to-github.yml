@@ -45,71 +45,6 @@ jobs:
               'User-Agent': 'Itqan-notion-to-github-sync'
             };
 
-            // ── Status → label mapping ──
-            const STATUS_LABEL_MAP = {
-              'Todo':               { label: 'status: todo',        color: 'C5DEF5' },
-              'In progress':        { label: 'status: in-progress', color: '0075CA' },
-              'Review By Business': { label: 'status: review',      color: 'E4B849' },
-              'Active Backlog':     { label: 'status: backlog',     color: 'D4C5F9' },
-            };
-            const ALL_STATUS_LABELS = Object.values(STATUS_LABEL_MAP).map(v => v.label);
-
-            // Ensure a status label exists in the repo (upsert)
-            async function ensureLabel(owner, repo, labelDef) {
-              const checkRes = await fetch(
-                `https://api.github.com/repos/${owner}/${repo}/labels/${encodeURIComponent(labelDef.label)}`,
-                { headers: ghHeaders }
-              );
-              if (!checkRes.ok) {
-                await fetch(`https://api.github.com/repos/${owner}/${repo}/labels`, {
-                  method: 'POST', headers: ghHeaders,
-                  body: JSON.stringify({ name: labelDef.label, color: labelDef.color })
-                });
-              }
-            }
-
-            // Sync label on a GitHub issue to match Notion status
-            async function syncLabel(owner, repo, issueNumber, notionStatus) {
-              const labelsRes = await fetch(
-                `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/labels`,
-                { headers: ghHeaders }
-              );
-              const currentLabels = labelsRes.ok ? await labelsRes.json() : [];
-              const currentStatusLabels = currentLabels.filter(l => ALL_STATUS_LABELS.includes(l.name));
-              const targetLabelDef = STATUS_LABEL_MAP[notionStatus];
-
-              if (notionStatus === 'Done') {
-                // Remove all status labels on close
-                for (const l of currentStatusLabels) {
-                  await fetch(
-                    `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(l.name)}`,
-                    { method: 'DELETE', headers: ghHeaders }
-                  );
-                }
-              } else if (targetLabelDef) {
-                // Ensure label exists, remove wrong ones, add correct one
-                await ensureLabel(owner, repo, targetLabelDef);
-                for (const l of currentStatusLabels) {
-                  if (l.name !== targetLabelDef.label) {
-                    await fetch(
-                      `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(l.name)}`,
-                      { method: 'DELETE', headers: ghHeaders }
-                    );
-                  }
-                }
-                if (!currentStatusLabels.some(l => l.name === targetLabelDef.label)) {
-                  await fetch(
-                    `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/labels`,
-                    {
-                      method: 'POST', headers: ghHeaders,
-                      body: JSON.stringify({ labels: [targetLabelDef.label] })
-                    }
-                  );
-                  console.log(`  [${owner}/${repo}#${issueNumber}] Label set → ${targetLabelDef.label}`);
-                }
-              }
-            }
-
             // ── Process one task ──
             async function processTask(task) {
               const notionStatus = task.properties['Status']?.select?.name;
@@ -160,8 +95,10 @@ jobs:
                 }
               }
 
-              // Label sync (always reconcile to match Notion status)
-              await syncLabel(owner, repo, issueNumber, notionStatus);
+              // Note: GitHub label syncing (status: todo/in-progress/review/backlog) was
+              // removed org-wide - it fought with repos managing their own labels and kept
+              // reappearing every minute regardless of local deletion. Issue open/closed
+              // state still mirrors Notion's Done/not-Done status above.
 
               // Comment sync (only for recently-edited tasks from pass 1)
               if (!task._fromRecent) return;
