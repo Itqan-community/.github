@@ -2,6 +2,10 @@ name: Post-Deploy Health Check
 
 on:
   workflow_call:
+    inputs:
+      url:
+        required: false
+        type: string
     secrets:
       HEALTH_CHECK_URL:
         required: false
@@ -15,7 +19,7 @@ jobs:
     steps:
       - name: Ping health endpoint
         env:
-          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
+          HEALTH_CHECK_URL: ${{ inputs.url || secrets.HEALTH_CHECK_URL }}
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_INCIDENTS }}
         run: |
           if [[ -z "$HEALTH_CHECK_URL" ]]; then
