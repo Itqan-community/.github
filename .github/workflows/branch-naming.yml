@@ -10,8 +10,8 @@ jobs:
       - name: Validate branch name
         run: |
           BRANCH="${{ github.head_ref }}"
-          if [[ ! "$BRANCH" =~ ^(feature|feat|hotfix|community|chore|release|dependabot|backport|fix)/.+ ]]; then
-            echo "::error::Branch '$BRANCH' does not match required patterns: feature/*, feat/*, hotfix/*, community/*, release/*, chore/*, dependabot/*, backport/*, fix/*"
+          if [[ ! "$BRANCH" =~ ^(feature|feat|hotfix|community|chore|release|dependabot|backport|fix|docs|perf|refactor|test|build|ci)/.+ ]]; then
+            echo "::error::Branch '$BRANCH' does not match required patterns: feature/*, feat/*, hotfix/*, community/*, release/*, chore/*, dependabot/*, backport/*, fix/*, docs/*, perf/*, refactor/*, test/*, build/*, ci/*"
             exit 1
           fi
           echo "Branch '$BRANCH' is valid."
